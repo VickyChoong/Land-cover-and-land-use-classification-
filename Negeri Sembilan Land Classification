@@ -1,0 +1,311 @@
+// Filter for Negeri Sembilan
+var negeriSembilan = adminBoundaries.filter(ee.Filter.eq('ADM1_NAME', 'Negeri Sembilan'));
+// Check the resulting feature  
+print('Negeri Sembilan Boundary:', negeriSembilan);
+// Define the area of interest (AOI) using the filtered boundary
+var roi = negeriSembilan.geometry();
+
+var image = L8.filterBounds(roi)
+            .filterDate('2023-01-01','2024-01-01')
+            .filterMetadata('CLOUD_COVER','less_than',10)
+            .mean()
+            .clip(roi);
+
+// Print image collection details to inspect the contents
+print('Image Collection:', image);
+
+// Add the true color composite to the map
+Map.addLayer(image, {bands: ['B4', 'B3', 'B2'], min: 0, max: 0.3}, 'TrueColor');
+
+
+// Print the image bands after clipping to verify band availability
+print('Clipped Image Bands:', image.bandNames());
+
+//Merge into one FeatureCollection and print details to consloe
+var classNames = tWater.merge(tResidential).merge(tCommercial).merge(tVegetation).merge(tBareland); 
+print(classNames); 
+
+//Extract training data from select bands of the image, print to console
+var bands = ['B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B10'];
+var training = image.select(bands).sampleRegions({
+  collection: classNames,
+  properties: ['landcover'],
+  scale: 30
+});
+print(training);
+
+// //Train classifier - CART
+// var bestClassifier = ee.Classifier.smileCart().train({
+//   features: training,
+//   classProperty: 'landcover',
+//   inputProperties: bands
+// });
+
+
+// // Train the Random Forest classifier with hyperparameters
+// var classifier = ee.Classifier.smileRandomForest({
+//   numberOfTrees: numTrees,
+//   seed: seed
+// }).train({
+//   features: training,
+//   classProperty: 'landcover',
+//   inputProperties: bands
+// });
+
+// // Hyperparameter tuning for Random Forest
+// var numTreesList = [50, 100, 150];
+// var seedList = [0, 42, 100];
+// var bestAccuracy = 0;
+// var bestNumTrees = 0;
+// var bestSeed = 0;
+
+// // Validation data
+// var valNames = vWater.merge(vResidential).merge(vCommercial).merge(vVegetation).merge(vBareland);
+
+// var validation = image.select(bands).sampleRegions({
+//   collection: valNames,
+//   properties: ['landcover'],
+//   scale: 30,
+// });
+// print(validation);
+
+// // Loop through each combination of hyperparameters
+// numTreesList.forEach(function(numTrees) {
+//   seedList.forEach(function(seed) {
+//     var classifier = ee.Classifier.smileRandomForest({
+//       numberOfTrees: numTrees,
+//       seed: seed
+//     }).train({
+//       features: training,
+//       classProperty: 'landcover',
+//       inputProperties: bands
+//     });
+
+//     var classified = image.select(bands).classify(classifier);
+
+//     var testAccuracy = validation.classify(classifier).errorMatrix('landcover', 'classification');
+//     var accuracy = testAccuracy.accuracy().getInfo();
+
+//     print('Accuracy for numTrees:', numTrees, 'seed:', seed, 'is', accuracy);
+
+//     if (accuracy > bestAccuracy) {
+//       bestAccuracy = accuracy;
+//       bestNumTrees = numTrees;
+//       bestSeed = seed;
+//     }
+//   });
+// });
+
+// print('Best accuracy:', bestAccuracy);
+// print('Best numTrees:', bestNumTrees);
+// print('Best seed:', bestSeed);
+
+// // Train the best classifier
+// var bestClassifier = ee.Classifier.smileRandomForest({
+//   numberOfTrees: bestNumTrees,
+//   seed: bestSeed
+// }).train({
+//   features: training,
+//   classProperty: 'landcover',
+//   inputProperties: bands
+// });
+
+
+
+// Hyperparameter tuning for SVM
+var kernelTypes = ['RBF', 'sigmoid'];
+var gammaList = [0.1, 0.5, 1];
+var costList = [1, 10, 100];
+var bestAccuracy = 0;
+var bestKernelType = '';
+var bestGamma = 0;
+var bestCost = 0;
+
+// Validation data
+var valNames = vWater.merge(vResidential).merge(vCommercial).merge(vVegetation).merge(vBareland);
+
+var validation = image.select(bands).sampleRegions({
+  collection: valNames,
+  properties: ['landcover'],
+  scale: 30,
+});
+print(validation);
+
+// Loop through each combination of hyperparameters
+kernelTypes.forEach(function(kernelType) {
+  gammaList.forEach(function(gamma) {
+    costList.forEach(function(cost) {
+      var classifier = ee.Classifier.libsvm({
+        kernelType: kernelType,
+        gamma: gamma,
+        cost: cost
+      }).train({
+        features: training,
+        classProperty: 'landcover',
+        inputProperties: bands
+      });
+
+      var classified = image.select(bands).classify(classifier);
+
+      var testAccuracy = validation.classify(classifier).errorMatrix('landcover', 'classification');
+      var accuracy = testAccuracy.accuracy().getInfo();
+
+      print('Accuracy for kernelType:', kernelType, 'gamma:', gamma, 'cost:', cost, 'is', accuracy);
+
+      if (accuracy > bestAccuracy) {
+        bestAccuracy = accuracy;
+        bestKernelType = kernelType;
+        bestGamma = gamma;
+        bestCost = cost;
+      }
+    });
+  });
+});
+
+print('Best accuracy:', bestAccuracy);
+print('Best kernelType:', bestKernelType);
+print('Best gamma:', bestGamma);
+print('Best cost:', bestCost);
+
+// Train the best classifier
+var bestClassifier = ee.Classifier.libsvm({
+  kernelType: bestKernelType,
+  gamma: bestGamma,
+  cost: bestCost
+}).train({
+  features: training,
+  classProperty: 'landcover',
+  inputProperties: bands
+});
+
+//Run the classification
+var classified = image.select(bands).classify(bestClassifier);
+
+//Centre the map on your training data coverage
+Map.centerObject(classNames, 11);
+//Add the classification to the map view, specify colours for classes
+Map.addLayer(classified,
+{min: 0, max: 3, palette: ['0000FF', 'FF0000', '8000ff','008000','FFFF00']},
+'classification');
+
+// Export the classified image to Google Drive as GeoTIFF
+Export.image.toDrive({
+  image: classified.visualize({min: 0, max: 4, palette: ['0000FF', 'FF0000', '8000ff', '008000', 'FFFF00']}),
+  description: 'classified_map_RF2',
+  folder: 'GEE_exports',
+  region: roi,
+  scale: 30,
+  fileFormat: 'GeoTIFF',
+  maxPixels: 1e9
+});
+
+ 
+//Merge into one FeatureCollection
+var valNames = vWater.merge(vResidential).merge(vCommercial).merge(vVegetation).merge(vBareland);
+
+var validation = classified.sampleRegions({
+  collection: valNames,
+  properties: ['landcover'],
+  scale: 30,
+});
+print(validation);
+
+//Compare the landcover of your validation data against the classification result
+var testAccuracy = validation.errorMatrix('landcover', 'classification');
+//Print the error matrix to the console
+print('Validation error matrix: ', testAccuracy);
+//Print the overall accuracy to the console
+print('Validation overall accuracy: ', testAccuracy.accuracy());
+
+// Calculate the area for each class
+var areaImage = ee.Image.pixelArea().addBands(classified);
+
+function calculateArea(classValue, className) {
+  // Mask the classified image to get only the pixels of the current class
+  var classMasked = areaImage.updateMask(classified.eq(classValue));
+  
+  // Reduce the region to get the sum of pixel areas
+  var stats = classMasked.reduceRegion({
+    reducer: ee.Reducer.sum(),
+    geometry: roi,
+    scale: 30,
+    maxPixels: 1e12
+  });
+  
+  // Print the result
+  var area = stats.get('area');
+  print(className + ' area: ', ee.Number(area).divide(1e6), ' square kilometers');
+}
+
+calculateArea(0, 'Water Bodies');
+calculateArea(1, 'Residential Area');
+calculateArea(2, 'Commercial Area');
+calculateArea(3, 'Vegetation');
+calculateArea(4, 'Bare Land');
+
+// set position of panel
+var legend = ui.Panel({
+  style: {
+    position: 'bottom-left',
+    padding: '8px 15px'
+  }
+});
+ 
+// Create legend title
+var legendTitle = ui.Label({
+  value: 'Classification',
+  style: {
+    fontWeight: 'bold',
+    fontSize: '18px',
+    margin: '0 0 4px 0',
+    padding: '0'
+    }
+});
+ 
+// Add the title to the panel
+legend.add(legendTitle);
+ 
+// Creates and styles 1 row of the legend.
+var makeRow = function(color, name) {
+ 
+      // Create the label that is actually the colored box.
+      var colorBox = ui.Label({
+        style: {
+          backgroundColor: '#' + color,
+          // Use padding to give the box height and width.
+          padding: '8px',
+          margin: '0 0 4px 0'
+        }
+      });
+ 
+      // Create the label filled with the description text.
+      var description = ui.Label({
+        value: name,
+        style: {margin: '0 0 4px 6px'}
+      });
+ 
+      // return the panel
+      return ui.Panel({
+        widgets: [colorBox, description],
+        layout: ui.Panel.Layout.Flow('horizontal')
+      });
+};
+ 
+//  Palette with the colors
+var palette =['0000FF', 'FF0000', '8000ff','008000','FFFF00'];
+ 
+// name of the legend
+var names = ['Water Bodies','Residential Area','Commercial Area', 'Vegetation', 'BareLand'];
+ 
+// Add color and and names
+for (var i = 0; i < 5; i++) {
+  legend.add(makeRow(palette[i], names[i]));
+  }  
+ 
+// add legend to map (alternatively you can also print the legend to the console)
+Map.add(legend);
+
+// Create the title label.
+var title = ui.Label('Land Cover Landuse Classification Map of Negeri Sembilan Year of 2023');
+title.style().set('position', 'top-center');
+Map.add(title);
